@@ -23,7 +23,8 @@ export default function DashboardPage({ userId, profile, onGoTo }: DashboardPage
   const [shareCopied, setShareCopied] = useState(false);
 
   const handleShare = async () => {
-    const url = window.location.href;
+    // URL fixe du site (page d'accueil)
+    const url = 'https://le-comptable.vercel.app/';
     if (navigator.share) {
       try {
         await navigator.share({ title: profile.company_name, url });
