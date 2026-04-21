@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { ClientApp, type AuthUser } from './components/Clientapp';
 import DashboardPage from './components/Dashboardpage';
-import ProduitsPage from './components/ProduitsPage';
+import ProduitsPage from "./components/produits/ProduitsPage";
 import NouvelleVentePage from './components/Nouvelleventepage';
 import FacturesPage from './components/Facturespage';
 import ClientsPage from './components/Clientspage';
