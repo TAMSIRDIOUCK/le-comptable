@@ -1,7 +1,7 @@
 // src/components/DashboardPage.tsx
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { TrendingUp, FileText, Package, Users, AlertTriangle, Clock, CheckCircle, ArrowRight, Calendar, BarChart3, ChevronLeft, ChevronRight } from 'lucide-react';
+import { TrendingUp, FileText, Package, Users, AlertTriangle, Clock, CheckCircle, ArrowRight, Calendar, BarChart3, ChevronLeft, ChevronRight, Share2 } from 'lucide-react';
 import type { Profile } from '../types';
 
 interface DashboardPageProps {
@@ -20,6 +20,20 @@ export default function DashboardPage({ userId, profile, onGoTo }: DashboardPage
   const [caMensuel, setCaMensuel]   = useState<{ mois: string; total: number }[]>([]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading]       = useState(true);
+  const [shareCopied, setShareCopied] = useState(false);
+
+  const handleShare = async () => {
+    const url = window.location.href;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: profile.company_name, url });
+      } catch (_) {}
+    } else {
+      await navigator.clipboard.writeText(url);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,12 +107,21 @@ export default function DashboardPage({ userId, profile, onGoTo }: DashboardPage
         <div className="absolute right-6 top-6 opacity-5">
           <TrendingUp className="w-32 h-32 text-emerald-400" />
         </div>
-        <div className="relative">
-          <p className="text-emerald-400 text-xs font-bold uppercase tracking-[0.2em] mb-2">Tableau de bord</p>
-          <h2 className="text-white text-3xl sm:text-4xl font-black tracking-tight uppercase mb-2">
-            {profile.company_name}
-          </h2>
-          {profile.address && <p className="text-white/40 text-sm">{profile.address}</p>}
+        <div className="relative flex items-start justify-between gap-4">
+          <div>
+            <p className="text-emerald-400 text-xs font-bold uppercase tracking-[0.2em] mb-2">Tableau de bord</p>
+            <h2 className="text-white text-3xl sm:text-4xl font-black tracking-tight uppercase mb-2">
+              {profile.company_name}
+            </h2>
+            {profile.address && <p className="text-white/40 text-sm">{profile.address}</p>}
+          </div>
+          <button
+            onClick={handleShare}
+            className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white/60 hover:text-white text-sm font-medium transition"
+          >
+            <Share2 className="w-4 h-4" />
+            {shareCopied ? 'Copié !' : 'Partager'}
+          </button>
         </div>
       </div>
 
