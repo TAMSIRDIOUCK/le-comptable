@@ -1,7 +1,7 @@
 // src/routes/auth/callback.tsx
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '.././lib/supabase';
 import { Calculator } from 'lucide-react';
 
 export default function AuthCallback() {

@@ -20,6 +20,19 @@ const STATUT_CONFIG = {
   annulee:   { label: 'Annulée',   color: 'text-red-400 bg-red-500/10 border-red-500/20', icon: XCircle },
 };
 
+// Helper pour extraire la liste des téléphones (gère à la fois l'ancien format et le nouveau tableau JSON)
+function getPhoneNumbers(profile: Profile): string[] {
+  // 1. Si phones est un tableau JSON stringifié
+  if ((profile as any).phones) {
+    try {
+      const parsed = JSON.parse((profile as any).phones);
+      if (Array.isArray(parsed) && parsed.length) return parsed.filter(Boolean);
+    } catch {}
+  }
+  // 2. Sinon, on utilise les champs individuels legacy
+  return [profile.phone, (profile as any).phone2, (profile as any).phone3].filter(Boolean) as string[];
+}
+
 export default function FactureView({ factureId, profile, onBack }: FactureViewProps) {
   const [facture, setFacture] = useState<Facture | null>(null);
   const [lignes, setLignes]   = useState<LigneFacture[]>([]);
@@ -55,8 +68,11 @@ export default function FactureView({ factureId, profile, onBack }: FactureViewP
           * { margin: 0; padding: 0; box-sizing: border-box; }
           body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1a1a1a; background: white; }
           .facture { max-width: 800px; margin: 0 auto; padding: 40px; }
-          .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; padding-bottom: 30px; border-bottom: 3px solid #10b981; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; padding-bottom: 30px; border-bottom: 3px solid #10b981; flex-wrap: wrap; }
+          .company-info { max-width: 60%; }
           .company-name { font-size: 26px; font-weight: 900; text-transform: uppercase; color: #0a0f1e; letter-spacing: 0.05em; }
+          .logo { max-height: 60px; max-width: 180px; object-fit: contain; margin-bottom: 8px; }
+          .slogan { font-size: 12px; font-style: italic; color: #10b981; margin-top: 4px; }
           .company-details { font-size: 11px; color: #6b7280; margin-top: 6px; line-height: 1.6; }
           .facture-info { text-align: right; }
           .facture-numero { font-size: 22px; font-weight: 800; color: #10b981; }
@@ -106,6 +122,10 @@ export default function FactureView({ factureId, profile, onBack }: FactureViewP
 
   const cfg = STATUT_CONFIG[facture.statut];
   const StatutIcon = cfg.icon;
+  const phoneNumbers = getPhoneNumbers(profile);
+  const tagline = (profile as any).tagline || '';
+  const website = (profile as any).website || '';
+  const logoUrl = (profile as any).logo_url || '';
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -115,7 +135,6 @@ export default function FactureView({ factureId, profile, onBack }: FactureViewP
           <ArrowLeft className="w-4 h-4" /> Retour aux factures
         </button>
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Changer statut */}
           <div className="flex gap-2">
             {facture.statut !== 'payee' && facture.statut !== 'annulee' && (
               <button onClick={() => updateStatut('payee')}
@@ -154,15 +173,26 @@ export default function FactureView({ factureId, profile, onBack }: FactureViewP
           <div className="facture" style={{ maxWidth: '800px', margin: '0 auto', padding: '40px', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#1a1a1a' }}>
             
             {/* En-tête entreprise */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px', paddingBottom: '30px', borderBottom: '3px solid #10b981' }}>
-              <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px', paddingBottom: '30px', borderBottom: '3px solid #10b981', flexWrap: 'wrap' }}>
+              <div style={{ maxWidth: '60%' }}>
+                {logoUrl && (
+                  <img src={logoUrl} alt="Logo" style={{ maxHeight: '60px', maxWidth: '180px', objectFit: 'contain', marginBottom: '8px' }} />
+                )}
                 <div style={{ fontSize: '26px', fontWeight: '900', textTransform: 'uppercase', color: '#0a0f1e', letterSpacing: '0.05em' }}>
                   {profile.company_name}
                 </div>
-                <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '6px', lineHeight: '1.6' }}>
+                {tagline && (
+                  <div style={{ fontSize: '12px', fontStyle: 'italic', color: '#10b981', marginTop: '4px' }}>
+                    {tagline}
+                  </div>
+                )}
+                <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '8px', lineHeight: '1.6' }}>
                   {profile.address && <div>{profile.address}</div>}
-                  {profile.phone && <div>Tél: {profile.phone}</div>}
+                  {phoneNumbers.length > 0 && (
+                    <div>Tél: {phoneNumbers.join(' / ')}</div>
+                  )}
                   {profile.email && <div>{profile.email}</div>}
+                  {website && <div>{website}</div>}
                 </div>
                 {(profile.nif || profile.rc) && (
                   <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '4px' }}>
@@ -277,8 +307,7 @@ export default function FactureView({ factureId, profile, onBack }: FactureViewP
             {/* Footer */}
             <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', fontSize: '11px', color: '#9ca3af', textAlign: 'center', lineHeight: '1.6' }}>
               <strong style={{ color: '#111', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{profile.company_name}</strong>
-              {profile.address && ` — ${profile.address}`}
-              {profile.phone && ` — Tél: ${profile.phone}`}
+              
               <br />Merci de votre confiance.
             </div>
           </div>

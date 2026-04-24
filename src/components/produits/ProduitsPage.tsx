@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Package, Plus, Pencil, Trash2, AlertTriangle, X, Check } from 'lucide-react';
-import type { Produit } from '../types';
+import type { Produit } from '../../types';
 
 interface ProduitsPageProps { userId: string; }
 

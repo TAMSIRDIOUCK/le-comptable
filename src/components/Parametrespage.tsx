@@ -1,7 +1,7 @@
 // src/components/ParametresPage.tsx
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Save, Building2 } from 'lucide-react';
+import { Save, Building2, Plus, Trash2 } from 'lucide-react';
 import type { Profile } from '../types';
 
 interface ParametresPageProps {
@@ -13,33 +13,52 @@ interface ParametresPageProps {
 export default function ParametresPage({ profile, onProfileUpdated, onLogout }: ParametresPageProps) {
   const [form, setForm] = useState({
     company_name: profile.company_name,
+    tagline:      (profile as any).tagline ?? '',
     address:      profile.address ?? '',
-    phone:        profile.phone ?? '',
     email:        profile.email ?? '',
+    website:      (profile as any).website ?? '',
     nif:          profile.nif ?? '',
     rc:           profile.rc ?? '',
   });
+
+  const initPhones = (): string[] => {
+    const raw = (profile as any).phones;
+    if (!raw) return [profile.phone ?? ''];
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) return p; } catch {}
+    return [raw];
+  };
+  const [phones, setPhones] = useState<string[]>(initPhones);
+
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved]   = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
 
   const handleSave = async () => {
     if (!form.company_name.trim()) return;
     setSaving(true);
-    const updates = { ...form, company_name: form.company_name.trim().toUpperCase(), updated_at: new Date().toISOString() };
-    const { data } = await supabase.from('profiles_comptable').update(updates).eq('id', profile.id).select().single();
+    const updates = {
+      ...form,
+      company_name: form.company_name.trim().toUpperCase(),
+      phones: JSON.stringify(phones.filter(p => p.trim())),
+      updated_at: new Date().toISOString(),
+    };
+    const { data } = await supabase
+      .from('profiles_comptable')
+      .update(updates)
+      .eq('id', profile.id)
+      .select()
+      .single();
     if (data) onProfileUpdated(data);
     setSaving(false); setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
 
-  const F = ({ label, k, placeholder, hint }: { label: string; k: keyof typeof form; placeholder?: string; hint?: string }) => (
-    <div>
-      <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">{label}</label>
-      <input value={form[k]} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} placeholder={placeholder}
-        className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
-      {hint && <p className="text-white/20 text-xs mt-1">{hint}</p>}
-    </div>
-  );
+  const inputCls = "w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20";
+  const labelCls = "text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block";
+
+  const validPhones = phones.filter(p => p.trim());
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -53,20 +72,75 @@ export default function ParametresPage({ profile, onProfileUpdated, onLogout }: 
           <Building2 className="w-4 h-4 text-emerald-400" /> Informations entreprise
         </h3>
 
-        <F label="Nom de l'entreprise *" k="company_name"
-          placeholder="MAISON DU CARRELAGE"
-          hint="Affiché en grand sur toutes les factures" />
-
-        <div className="grid grid-cols-2 gap-4">
-          <F label="Téléphone" k="phone" placeholder="+221 77 000 00 00" />
-          <F label="Email" k="email" placeholder="contact@votreentreprise.sn" />
+        {/* Nom */}
+        <div>
+          <label className={labelCls}>Nom de l'entreprise *</label>
+          <input value={form.company_name} onChange={set('company_name')} placeholder="MAISON DU CARRELAGE" className={inputCls} />
+          <p className="text-white/20 text-xs mt-1">Affiché en grand sur toutes les factures</p>
         </div>
 
-        <F label="Adresse" k="address" placeholder="Zone Industrielle, Lot 42, Dakar" />
+        {/* Slogan */}
+        <div>
+          <label className={labelCls}>Activité / Slogan</label>
+          <input value={form.tagline} onChange={set('tagline')} placeholder="Vente et pose de carrelage, faïence et marbre" className={inputCls} />
+        </div>
 
+        {/* Téléphones multiples */}
+        <div>
+          <label className={labelCls}>Téléphone(s)</label>
+          <div className="space-y-2">
+            {phones.map((p, i) => (
+              <div key={i} className="flex gap-2">
+                <input
+                  type="tel"
+                  value={p}
+                  onChange={e => setPhones(prev => prev.map((v, idx) => idx === i ? e.target.value : v))}
+                  placeholder="+221 77 000 00 00"
+                  className="flex-1 bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20"
+                />
+                {phones.length > 1 && (
+                  <button onClick={() => setPhones(prev => prev.filter((_, idx) => idx !== i))}
+                    className="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setPhones(prev => [...prev, ''])}
+            className="mt-2 flex items-center gap-1 text-emerald-400 hover:text-emerald-300 text-sm font-medium transition">
+            <Plus className="w-3.5 h-3.5" /> Ajouter un numéro
+          </button>
+        </div>
+
+        {/* Email + Site */}
         <div className="grid grid-cols-2 gap-4">
-          <F label="NIF (Numéro Identif. Fiscal)" k="nif" placeholder="00000000" />
-          <F label="RC (Registre de Commerce)" k="rc" placeholder="SN-DKR-2024-XXX" />
+          <div>
+            <label className={labelCls}>Email</label>
+            <input value={form.email} onChange={set('email')} placeholder="contact@votreentreprise.sn" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Site web</label>
+            <input value={form.website} onChange={set('website')} placeholder="www.votreentreprise.sn" className={inputCls} />
+          </div>
+        </div>
+
+        {/* Adresse */}
+        <div>
+          <label className={labelCls}>Adresse</label>
+          <input value={form.address} onChange={set('address')} placeholder="Zone Industrielle, Lot 42, Dakar" className={inputCls} />
+        </div>
+
+        {/* NIF + RC */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelCls}>NIF (Numéro Identif. Fiscal)</label>
+            <input value={form.nif} onChange={set('nif')} placeholder="00000000" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>RC (Registre de Commerce)</label>
+            <input value={form.rc} onChange={set('rc')} placeholder="SN-DKR-2024-XXX" className={inputCls} />
+          </div>
         </div>
 
         <button onClick={handleSave} disabled={saving}
@@ -85,10 +159,16 @@ export default function ParametresPage({ profile, onProfileUpdated, onLogout }: 
               <div style={{ fontSize: '20px', fontWeight: '900', textTransform: 'uppercase', color: '#0a0f1e', letterSpacing: '0.05em' }}>
                 {form.company_name || 'NOM ENTREPRISE'}
               </div>
-              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px', lineHeight: '1.6' }}>
+              {form.tagline && (
+                <div style={{ fontSize: '11px', color: '#10b981', fontStyle: 'italic', marginTop: '2px' }}>
+                  {form.tagline}
+                </div>
+              )}
+              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '5px', lineHeight: '1.7' }}>
                 {form.address && <div>{form.address}</div>}
-                {form.phone && <div>Tél: {form.phone}</div>}
+                {validPhones.length > 0 && <div>Tél: {validPhones.join(' / ')}</div>}
                 {form.email && <div>{form.email}</div>}
+                {form.website && <div>{form.website}</div>}
               </div>
               {(form.nif || form.rc) && (
                 <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '3px' }}>
