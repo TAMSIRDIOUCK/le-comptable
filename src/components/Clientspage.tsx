@@ -1,15 +1,18 @@
 // src/components/ClientsPage.tsx
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { Users, Plus, Pencil, Trash2, X, Check, Search } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, X, Check, Search, FileText } from 'lucide-react';
 import type { Client } from '../types';
 
-interface ClientsPageProps { userId: string; }
+interface ClientsPageProps { 
+  userId: string;
+  onCreerFacture?: (client: Client) => void;  // ← Nouvelle prop
+}
 
 interface FormState { nom: string; phone: string; adresse: string; email: string; }
 const emptyForm: FormState = { nom: '', phone: '', adresse: '', email: '' };
 
-export default function ClientsPage({ userId }: ClientsPageProps) {
+export default function ClientsPage({ userId, onCreerFacture }: ClientsPageProps) {
   const [clients, setClients]   = useState<Client[]>([]);
   const [loading, setLoading]   = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -37,19 +40,38 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
   const handleSave = async () => {
     if (!form.nom.trim()) return;
     setSaving(true);
-    const payload = { nom: form.nom.trim(), phone: form.phone.trim(), adresse: form.adresse.trim(), email: form.email.trim(), user_id: userId };
+    const payload = { 
+      nom: form.nom.trim(), 
+      phone: form.phone.trim() || null, 
+      adresse: form.adresse.trim() || null, 
+      email: form.email.trim() || null, 
+      user_id: userId,
+      updated_at: new Date().toISOString()
+    };
+    
     if (editing) {
       await supabase.from('clients_comptable').update(payload).eq('id', editing.id);
     } else {
-      await supabase.from('clients_comptable').insert({ ...payload, created_at: new Date().toISOString() });
+      await supabase.from('clients_comptable').insert({ 
+        ...payload, 
+        created_at: new Date().toISOString() 
+      });
     }
-    setSaving(false); setShowModal(false); load();
+    setSaving(false); 
+    setShowModal(false); 
+    load();
   };
 
   const handleDelete = async (id: string, nom: string) => {
     if (!confirm(`Supprimer le client "${nom}" ?`)) return;
     await supabase.from('clients_comptable').delete().eq('id', id);
     setClients(c => c.filter(x => x.id !== id));
+  };
+
+  const handleCreerFacture = (client: Client) => {
+    if (onCreerFacture) {
+      onCreerFacture(client);
+    }
   };
 
   const filtered = clients.filter(c => {
@@ -72,8 +94,12 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
 
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-        <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Rechercher un client..."
-          className="w-full bg-[#0d1627] text-white rounded-xl pl-9 pr-4 py-2.5 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm" />
+        <input 
+          value={searchQ} 
+          onChange={e => setSearchQ(e.target.value)} 
+          placeholder="Rechercher un client..."
+          className="w-full bg-[#0d1627] text-white rounded-xl pl-9 pr-4 py-2.5 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm" 
+        />
       </div>
 
       {loading ? (
@@ -90,9 +116,11 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-white/5">
-                  {['Nom', 'Téléphone', 'Adresse', 'Email', ''].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">{h}</th>
-                  ))}
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Nom</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Téléphone</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Adresse</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Email</th>
+                  <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-white/30">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -103,9 +131,29 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
                     <td className="px-4 py-3.5 text-white/60 text-sm">{c.adresse || '—'}</td>
                     <td className="px-4 py-3.5 text-white/60 text-sm">{c.email || '—'}</td>
                     <td className="px-4 py-3.5">
-                      <div className="flex gap-2">
-                        <button onClick={() => openEdit(c)} className="text-white/30 hover:text-white transition p-1"><Pencil className="w-4 h-4" /></button>
-                        <button onClick={() => handleDelete(c.id, c.nom)} className="text-white/30 hover:text-red-400 transition p-1"><Trash2 className="w-4 h-4" /></button>
+                      <div className="flex gap-2 justify-center">
+                        {/* Bouton Créer une facture */}
+                        <button 
+                          onClick={() => handleCreerFacture(c)} 
+                          className="text-emerald-400 hover:text-emerald-300 transition p-1.5 bg-emerald-500/10 rounded-lg"
+                          title="Créer une facture pour ce client"
+                        >
+                          <FileText className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => openEdit(c)} 
+                          className="text-white/30 hover:text-white transition p-1.5"
+                          title="Modifier le client"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(c.id, c.nom)} 
+                          className="text-white/30 hover:text-red-400 transition p-1.5"
+                          title="Supprimer le client"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -116,6 +164,7 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
         </div>
       )}
 
+      {/* Modal ajout/édition */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
           <div className="bg-[#0d1627] border border-white/10 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
@@ -125,16 +174,21 @@ export default function ClientsPage({ userId }: ClientsPageProps) {
             </div>
             <div className="p-6 space-y-4">
               {[
-                { label: 'Nom *', key: 'nom', placeholder: 'M. Abdou Diallo / Société XYZ' },
-                { label: 'Téléphone', key: 'phone', placeholder: '+221 77 000 00 00' },
-                { label: 'Adresse', key: 'adresse', placeholder: 'Cité Keur Gorgui, Dakar' },
-                { label: 'Email', key: 'email', placeholder: 'client@email.com' },
+                { label: 'Nom *', key: 'nom', placeholder: 'M. Abdou Diallo / Société XYZ', required: true },
+                { label: 'Téléphone', key: 'phone', placeholder: '+221 77 000 00 00', required: false },
+                { label: 'Adresse', key: 'adresse', placeholder: 'Cité Keur Gorgui, Dakar', required: false },
+                { label: 'Email', key: 'email', placeholder: 'client@email.com', required: false },
               ].map(({ label, key, placeholder }) => (
                 <div key={key}>
-                  <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">{label}</label>
-                  <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">
+                    {label} {!label.includes('*') && <span className="text-white/20 text-[10px]">(optionnel)</span>}
+                  </label>
+                  <input 
+                    value={(form as any)[key]} 
+                    onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                     placeholder={placeholder}
-                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
+                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" 
+                  />
                 </div>
               ))}
             </div>

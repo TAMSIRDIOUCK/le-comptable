@@ -1,4 +1,4 @@
-// src/App.tsx
+// src/App.tsx (extrait modifié avec la gestion du client pré-sélectionné)
 import { useState } from 'react';
 import { ClientApp, type AuthUser } from './components/Clientapp';
 import DashboardPage from './components/Dashboardpage';
@@ -8,7 +8,7 @@ import FacturesPage from './components/Facturespage';
 import ClientsPage from './components/Clientspage';
 import ParametresPage from './components/Parametrespage';
 import { Calculator, LayoutDashboard, Package, FileText, Plus, Users, Settings, Menu, X, LogOut } from 'lucide-react';
-import type { Profile } from './types';
+import type { Profile, Client } from './types';
 
 type Tab = 'dashboard' | 'produits' | 'nouvelle-vente' | 'factures' | 'clients' | 'parametres';
 
@@ -17,6 +17,7 @@ function AppShell({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => 
   const [profile, setProfile] = useState<Profile>(authUser.profile);
   const [menuOpen, setMenuOpen] = useState(false);
   const [openFactureId, setOpenFactureId] = useState<string | null>(null);
+  const [preselectedClient, setPreselectedClient] = useState<Client | null>(null); // ← Nouveau state
 
   const navItems: { key: Tab; label: string; icon: any; primary?: boolean }[] = [
     { key: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
@@ -27,15 +28,29 @@ function AppShell({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => 
     { key: 'parametres', label: 'Paramètres', icon: Settings },
   ];
 
-  const navigate = (t: Tab, factureId?: string) => {
+  const navigate = (t: Tab, factureId?: string, client?: Client | null) => {
     setTab(t);
     if (factureId) setOpenFactureId(factureId);
     else setOpenFactureId(null);
+    
+    // Gérer le client pré-sélectionné
+    if (client) {
+      setPreselectedClient(client);
+    } else if (t !== 'nouvelle-vente') {
+      // Réinitialiser quand on quitte la page nouvelle vente
+      setPreselectedClient(null);
+    }
+    
     setMenuOpen(false);
   };
 
   const handleFactureCreee = (factureId: string) => {
     navigate('factures', factureId);
+    setPreselectedClient(null); // Réinitialiser après création
+  };
+
+  const handleCreerFactureFromClient = (client: Client) => {
+    navigate('nouvelle-vente', undefined, client);
   };
 
   return (
@@ -83,7 +98,7 @@ function AppShell({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => 
         </div>
       </aside>
 
-      {/* Header mobile */}
+      {/* Header mobile - inchangé */}
       <header className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-[#0a0f1e]/95 backdrop-blur border-b border-white/5 h-14 flex items-center justify-between px-4">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
@@ -96,7 +111,7 @@ function AppShell({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => 
         </button>
       </header>
 
-      {/* Menu mobile overlay */}
+      {/* Menu mobile overlay - inchangé */}
       {menuOpen && (
         <div className="lg:hidden fixed inset-0 z-30 bg-black/60 backdrop-blur-sm" onClick={() => setMenuOpen(false)}>
           <div className="absolute left-0 top-14 bottom-0 w-64 bg-[#0a0f1e] border-r border-white/5 p-4 space-y-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -121,14 +136,25 @@ function AppShell({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => 
         <div className="min-h-screen pt-14 lg:pt-0 p-4 sm:p-6 lg:p-8">
           {tab === 'dashboard' && <DashboardPage userId={authUser.id} profile={profile} onGoTo={t => navigate(t as Tab)} />}
           {tab === 'produits' && <ProduitsPage userId={authUser.id} />}
-          {tab === 'nouvelle-vente' && <NouvelleVentePage userId={authUser.id} onFactureCreee={handleFactureCreee} />}
+          {tab === 'nouvelle-vente' && (
+            <NouvelleVentePage 
+              userId={authUser.id} 
+              onFactureCreee={handleFactureCreee} 
+              preselectedClient={preselectedClient}  // ← Passer le client pré-sélectionné
+            />
+          )}
           {tab === 'factures' && <FacturesPage userId={authUser.id} profile={profile} onNouvelleFacture={() => navigate('nouvelle-vente')} openFactureId={openFactureId} />}
-          {tab === 'clients' && <ClientsPage userId={authUser.id} />}
+          {tab === 'clients' && (
+            <ClientsPage 
+              userId={authUser.id} 
+              onCreerFacture={handleCreerFactureFromClient}  // ← Passer la callback
+            />
+          )}
           {tab === 'parametres' && <ParametresPage profile={profile} onProfileUpdated={setProfile} onLogout={onLogout} />}
         </div>
       </main>
 
-      {/* Bottom nav mobile */}
+      {/* Bottom nav mobile - inchangé */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-30 bg-[#0a0f1e]/95 backdrop-blur border-t border-white/5 grid grid-cols-5 h-16">
         {[
           { key: 'dashboard' as Tab, icon: LayoutDashboard, label: 'Accueil' },

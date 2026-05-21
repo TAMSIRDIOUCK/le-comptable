@@ -1,536 +1,586 @@
 // src/components/NouvelleVentePage.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { Plus, Trash2, Search, Check, FileText } from 'lucide-react';
-import type { Produit, LigneFacture } from '../types';
+import {
+  Plus, Trash2, Save, ChevronDown, X, UserCheck, Search, Package
+} from 'lucide-react';
+import type { Client } from '../types';
+
+/* ─── Types locaux ───────────────────────────────────────────────── */
+interface Produit {
+  id: string;
+  nom: string;
+  reference: string;
+  couleur: string;
+  format: string;
+  prix_unitaire: number;
+  prix_m2?: number;  // Ajout pour compatibilité
+}
+
+interface Ligne {
+  id: string;
+  designation: string;
+  reference: string;
+  couleur: string;
+  format: string;
+  quantite_m2: number;
+  prix_unitaire: number;
+  remise_pct: number;
+  total_ligne: number;
+}
 
 interface NouvelleVentePageProps {
   userId: string;
   onFactureCreee: (factureId: string) => void;
+  preselectedClient?: Client | null;
+  preselectedProduct?: Produit | null;  // ← Nouvelle prop ajoutée
 }
 
-const fmt = (v: number) => new Intl.NumberFormat('fr-FR').format(Math.round(v));
+/* ─── Helpers ────────────────────────────────────────────────────── */
+const uid  = () => Math.random().toString(36).slice(2);
+const fmt  = (v: number) => new Intl.NumberFormat('fr-FR').format(Math.round(v));
 
-// Ligne vide manuelle (sans produit catalogue)
-const newLigneManuelle = (ordre: number): LigneFacture => ({
-  produit_id: undefined,
-  designation: '',
-  reference: undefined,
-  couleur: undefined,
-  format: undefined,
-  quantite_m2: 1,
-  prix_unitaire: 0,
-  total_ligne: 0,
-  ordre,
-});
+function makeLigne(): Ligne {
+  return { 
+    id: uid(), 
+    designation: '', 
+    reference: '', 
+    couleur: '', 
+    format: '', 
+    quantite_m2: 1, 
+    prix_unitaire: 0, 
+    remise_pct: 0, 
+    total_ligne: 0 
+  };
+}
 
-export default function NouvelleVentePage({ userId, onFactureCreee }: NouvelleVentePageProps) {
-  const [produits, setProduits]           = useState<Produit[]>([]);
-  const [lignes, setLignes]               = useState<LigneFacture[]>([]);
-  const [clientNom, setClientNom]         = useState('');
-  const [clientPhone, setClientPhone]     = useState('');
-  const [clientAdresse, setClientAdresse] = useState('');
-  const [dateFacture, setDateFacture]     = useState(new Date().toISOString().split('T')[0]);
-  const [tvaPct, setTvaPct]               = useState('0');
-  const [notes, setNotes]                 = useState('');
-  const [saving, setSaving]               = useState(false);
-  const [searchProd, setSearchProd]       = useState('');
-  const [showProdModal, setShowProdModal] = useState(false);
+function computeLigne(l: Ligne): Ligne {
+  const brut   = l.quantite_m2 * l.prix_unitaire;
+  const remise = brut * (l.remise_pct / 100);
+  return { ...l, total_ligne: Math.max(0, brut - remise) };
+}
 
-  useEffect(() => {
-    supabase
-      .from('produits_comptable')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('actif', true)
-      .order('nom')
-      .then(({ data }) => setProduits(data || []));
+/* ─── Composant ──────────────────────────────────────────────────── */
+export default function NouvelleVentePage({ 
+  userId, 
+  onFactureCreee, 
+  preselectedClient,
+  preselectedProduct  // ← Nouvelle prop déstructurée
+}: NouvelleVentePageProps) {
+  /* Client */
+  const [clients, setClients]             = useState<Client[]>([]);
+  const [clientSearch, setClientSearch]   = useState('');
+  const [showClientDrop, setShowClientDrop] = useState(false);
+  const [clientNom, setClientNom]         = useState(preselectedClient?.nom     ?? '');
+  const [clientPhone, setClientPhone]     = useState(preselectedClient?.phone   ?? '');
+  const [clientEmail, setClientEmail]     = useState(preselectedClient?.email   ?? '');
+  const [clientAdresse, setClientAdresse] = useState(preselectedClient?.adresse ?? '');
+
+  /* Produits */
+  const [produits, setProduits] = useState<Produit[]>([]);
+
+  /* Lignes */
+  const [lignes, setLignes]   = useState<Ligne[]>([makeLigne()]);
+
+  /* Options facture */
+  const [remiseMontant, setRemiseMontant] = useState(0);
+  const [tvaPct,    setTvaPct]    = useState(0);
+  const [notes,     setNotes]     = useState('');
+  const [saving,    setSaving]    = useState(false);
+
+  /* Chargement des clients et produits */
+  const loadClients = useCallback(async () => {
+    const { data } = await supabase.from('clients_comptable').select('*').eq('user_id', userId).order('nom');
+    setClients(data || []);
   }, [userId]);
 
-  // ── Calculs ────────────────────────────────────────────────────────────────
-  const calculs = useMemo(() => {
-    const sousTotal  = lignes.reduce((s, l) => s + l.total_ligne, 0);
-    const tvaMontant = sousTotal * (parseFloat(tvaPct) || 0) / 100;
-    return { sousTotal, tvaMontant, totalTTC: sousTotal + tvaMontant };
-  }, [lignes, tvaPct]);
+  const loadProduits = useCallback(async () => {
+    const { data } = await supabase.from('produits_comptable').select('*').eq('user_id', userId).order('nom');
+    setProduits(data || []);
+  }, [userId]);
 
-  // ── Gestion des lignes ─────────────────────────────────────────────────────
+  useEffect(() => { loadClients(); }, [loadClients]);
+  useEffect(() => { loadProduits(); }, [loadProduits]);
 
-  /** Ajoute une ligne depuis le catalogue (prix à 0 — l'utilisateur le saisit ensuite) */
-  const addLigneFromCatalogue = (produit: Produit) => {
-    setLignes(prev => [
-      ...prev,
-      {
-        produit_id:    produit.id,
-        designation:   produit.nom,
-        reference:     produit.reference,
-        couleur:       produit.couleur,
-        format:        produit.format,
-        quantite_m2:   1,
-        prix_unitaire: 0,   // ← à saisir manuellement
-        total_ligne:   0,
-        ordre:         prev.length,
-      },
-    ]);
-    setShowProdModal(false);
-    setSearchProd('');
+  /* Pré-remplissage si client transmis depuis ClientsPage */
+  useEffect(() => {
+    if (preselectedClient) {
+      setClientNom(preselectedClient.nom);
+      setClientPhone(preselectedClient.phone ?? '');
+      setClientEmail(preselectedClient.email ?? '');
+      setClientAdresse(preselectedClient.adresse ?? '');
+    }
+  }, [preselectedClient]);
+
+  /* Pré-remplissage si produit transmis depuis ProduitsPage */
+  useEffect(() => {
+    if (preselectedProduct && produits.length > 0) {
+      // Récupérer le produit complet depuis la liste
+      const fullProduct = produits.find(p => p.id === preselectedProduct.id);
+      if (fullProduct) {
+        const prix = fullProduct.prix_unitaire || fullProduct.prix_m2 || 0;
+        const newLigne: Ligne = {
+          id: uid(),
+          designation: fullProduct.nom,
+          reference: fullProduct.reference || '',
+          couleur: fullProduct.couleur || '',
+          format: fullProduct.format || '',
+          quantite_m2: 1,
+          prix_unitaire: prix,
+          remise_pct: 0,
+          total_ligne: prix,
+        };
+        setLignes([newLigne]);
+      }
+    }
+  }, [preselectedProduct, produits]);
+
+  /* ── Gestion des lignes ────────────────────────────────────────── */
+  const updateLigne = (id: string, patch: Partial<Ligne>) => {
+    setLignes(prev => prev.map(l => l.id === id ? computeLigne({ ...l, ...patch }) : l));
+  };
+  const addLigne    = () => setLignes(prev => [...prev, makeLigne()]);
+  const removeLigne = (id: string) => setLignes(prev => prev.filter(l => l.id !== id));
+
+  /* ── Calculs totaux ────────────────────────────────────────────── */
+  const sousTotal      = lignes.reduce((s, l) => s + l.total_ligne, 0);
+  const apresRemise    = Math.max(0, sousTotal - remiseMontant);
+  const tvaMontant     = apresRemise * (tvaPct / 100);
+  const totalTTC       = apresRemise + tvaMontant;
+
+  /* ── Sélection client depuis le dropdown ──────────────────────── */
+  const handleSelectClient = (c: Client) => {
+    setClientNom(c.nom);
+    setClientPhone(c.phone ?? '');
+    setClientEmail(c.email ?? '');
+    setClientAdresse(c.adresse ?? '');
+    setShowClientDrop(false);
+    setClientSearch('');
   };
 
-  /** Ajoute une ligne entièrement manuelle */
-  const addLigneManuelle = () => {
-    setLignes(prev => [...prev, newLigneManuelle(prev.length)]);
-    setShowProdModal(false);
-    setSearchProd('');
-  };
+  const filteredClients = clients.filter(c => {
+    const q = clientSearch.toLowerCase();
+    return !q || c.nom.toLowerCase().includes(q) || (c.phone ?? '').toLowerCase().includes(q);
+  });
 
-  const updateDesignation = (idx: number, val: string) =>
-    setLignes(prev => prev.map((l, i) => i === idx ? { ...l, designation: val } : l));
-
-  const updateQte = (idx: number, val: string) => {
-    const q = parseFloat(val) || 0;
-    setLignes(prev =>
-      prev.map((l, i) => i === idx ? { ...l, quantite_m2: q, total_ligne: q * l.prix_unitaire } : l),
-    );
-  };
-
-  const updatePrix = (idx: number, val: string) => {
-    const p = parseFloat(val) || 0;
-    setLignes(prev =>
-      prev.map((l, i) => i === idx ? { ...l, prix_unitaire: p, total_ligne: l.quantite_m2 * p } : l),
-    );
-  };
-
-  const removeLigne = (idx: number) =>
-    setLignes(prev => prev.filter((_, i) => i !== idx));
-
-  // ── Numérotation ───────────────────────────────────────────────────────────
-  const nextNumero = useCallback(async (): Promise<string> => {
-    const year = new Date().getFullYear();
+  /* ── Numéro de facture ────────────────────────────────────────── */
+  const genNumero = async (): Promise<string> => {
     const { count } = await supabase
       .from('factures_comptable')
       .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .gte('created_at', `${year}-01-01`)
-      .lte('created_at', `${year}-12-31`);
-    const n = (count ?? 0) + 1;
-    return `FAC-${year}-${String(n).padStart(4, '0')}`;
-  }, [userId]);
-
-  // ── Validation ─────────────────────────────────────────────────────────────
-  const validate = (): string | null => {
-    if (!clientNom.trim()) return 'Le nom du client est requis.';
-    if (lignes.length === 0) return 'Ajoutez au moins un produit.';
-    for (let i = 0; i < lignes.length; i++) {
-      if (!lignes[i].designation.trim()) return `La ligne ${i + 1} doit avoir une désignation.`;
-    }
-    return null;
+      .eq('user_id', userId);
+    const n = ((count ?? 0) + 1).toString().padStart(4, '0');
+    return `FAC-${new Date().getFullYear()}-${n}`;
   };
 
-  // ── Sauvegarde ─────────────────────────────────────────────────────────────
+  /* ── Sauvegarde ───────────────────────────────────────────────── */
   const handleSave = async (statut: 'brouillon' | 'emise') => {
-    const err = validate();
-    if (err) { alert(err); return; }
-
+    if (!clientNom.trim() || lignes.every(l => !l.designation.trim())) return;
     setSaving(true);
     try {
-      const numero = await nextNumero();
-      const { data: facture, error: fErr } = await supabase
+      const numero = await genNumero();
+      const { data: facture, error } = await supabase
         .from('factures_comptable')
         .insert({
-          user_id:          userId,
+          user_id:         userId,
           numero,
-          client_nom:       clientNom.trim(),
-          client_phone:     clientPhone.trim(),
-          client_adresse:   clientAdresse.trim(),
-          date_facture:     dateFacture,
-          sous_total:       calculs.sousTotal,
-          tva_pct:          parseFloat(tvaPct) || 0,
-          tva_montant:      calculs.tvaMontant,
-          remise_pct:       0,
-          remise_montant:   0,
-          total_ttc:        calculs.totalTTC,
           statut,
-          notes:            notes.trim(),
-          created_at:       new Date().toISOString(),
-          updated_at:       new Date().toISOString(),
+          client_nom:      clientNom.trim(),
+          client_phone:    clientPhone.trim() || null,
+          client_email:    clientEmail.trim() || null,
+          client_adresse:  clientAdresse.trim() || null,
+          date_facture:    new Date().toISOString().slice(0, 10),
+          echeance:        null,
+          sous_total:      sousTotal,
+          remise_montant:  remiseMontant,
+          remise_pct:      0,
+          tva_pct:         tvaPct,
+          tva_montant:     tvaMontant,
+          total_ttc:       totalTTC,
+          notes:           notes.trim() || null,
+          created_at:      new Date().toISOString(),
         })
         .select()
         .single();
 
-      if (fErr) throw fErr;
+      if (error || !facture) throw error;
 
-      // Insérer les lignes
-      const lignesPayload = lignes.map((l, i) => ({
-        facture_id:    facture.id,
-        produit_id:    l.produit_id ?? null,
-        designation:   l.designation,
-        reference:     l.reference ?? null,
-        couleur:       l.couleur ?? null,
-        format:        l.format ?? null,
-        quantite_m2:   l.quantite_m2,
-        prix_unitaire: l.prix_unitaire,
-        total_ligne:   l.total_ligne,
-        ordre:         i,
-      }));
-      await supabase.from('facture_lignes_comptable').insert(lignesPayload);
+      const lignesInsert = lignes
+        .filter(l => l.designation.trim())
+        .map((l, i) => ({
+          facture_id:    facture.id,
+          ordre:         i + 1,
+          designation:   l.designation.trim(),
+          reference:     l.reference.trim() || null,
+          couleur:       l.couleur.trim() || null,
+          format:        l.format.trim() || null,
+          quantite_m2:   l.quantite_m2,
+          prix_unitaire: l.prix_unitaire,
+          remise_pct:    l.remise_pct,
+          total_ligne:   l.total_ligne,
+        }));
 
-      // Déduire le stock uniquement pour les produits du catalogue
-      for (const l of lignes) {
-        if (l.produit_id) {
-          const prod = produits.find(p => p.id === l.produit_id);
-          if (prod) {
-            const newStock = Math.max(0, prod.stock_m2 - l.quantite_m2);
-            await supabase
-              .from('produits_comptable')
-              .update({ stock_m2: newStock, updated_at: new Date().toISOString() })
-              .eq('id', l.produit_id);
-          }
-        }
-      }
-
+      await supabase.from('facture_lignes_comptable').insert(lignesInsert);
       onFactureCreee(facture.id);
-    } catch (err) {
-      console.error(err);
-      alert('Erreur lors de la sauvegarde');
+    } catch (e) {
+      console.error(e);
+      alert('Erreur lors de la création de la facture');
     } finally {
       setSaving(false);
     }
   };
 
-  const filteredProduits = produits.filter(p => {
-    const q = searchProd.toLowerCase();
-    return (
-      !q ||
-      p.nom.toLowerCase().includes(q) ||
-      (p.reference ?? '').toLowerCase().includes(q) ||
-      (p.couleur ?? '').toLowerCase().includes(q)
-    );
-  });
-
-  // ── Rendu ──────────────────────────────────────────────────────────────────
+  /* ══════════════════════════════════════════════════════════════ */
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
+
+      {/* Header */}
       <div>
-        <h2 className="text-white text-2xl font-black tracking-tight">Nouvelle Facture</h2>
-        <p className="text-white/40 text-sm mt-0.5">Créez et émettez une facture professionnelle</p>
+        <h2 className="text-white text-2xl font-black tracking-tight">Nouvelle facture</h2>
+        <p className="text-white/40 text-sm mt-0.5">Remplissez les informations ci-dessous</p>
       </div>
 
-      {/* ── Infos client + TVA ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Client */}
-        <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-6 space-y-4">
-          <h3 className="text-white font-bold text-base flex items-center gap-2">
-            <span className="w-6 h-6 bg-emerald-500/20 text-emerald-400 rounded-md flex items-center justify-center text-xs font-black">1</span>
-            Informations client
-          </h3>
+      {/* ── Section client ─────────────────────────────────────────── */}
+      <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-white font-bold text-sm uppercase tracking-wider">Client</h3>
 
+          {/* Bouton « Choisir un client existant » */}
+          <div className="relative">
+            <button
+              onClick={() => setShowClientDrop(v => !v)}
+              className="inline-flex items-center gap-2 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/10 text-xs font-bold px-3 py-1.5 rounded-lg transition"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              Choisir un client
+              <ChevronDown className="w-3 h-3" />
+            </button>
+
+            {showClientDrop && (
+              <div className="absolute right-0 top-9 z-40 w-72 bg-[#0a0f1e] border border-white/10 rounded-xl shadow-2xl overflow-hidden">
+                <div className="p-2 border-b border-white/5">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
+                    <input
+                      autoFocus
+                      value={clientSearch}
+                      onChange={e => setClientSearch(e.target.value)}
+                      placeholder="Rechercher..."
+                      className="w-full bg-[#060d1a] text-white text-sm rounded-lg pl-8 pr-3 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 placeholder-white/20"
+                    />
+                  </div>
+                </div>
+                <div className="max-h-56 overflow-y-auto">
+                  {filteredClients.length === 0 ? (
+                    <div className="py-6 text-center text-white/30 text-sm">Aucun client trouvé</div>
+                  ) : (
+                    filteredClients.map(c => (
+                      <button
+                        key={c.id}
+                        onClick={() => handleSelectClient(c)}
+                        className="w-full text-left px-4 py-3 hover:bg-white/5 transition border-b border-white/[0.03] last:border-0"
+                      >
+                        <div className="text-white text-sm font-semibold">{c.nom}</div>
+                        {c.phone && <div className="text-white/40 text-xs mt-0.5">{c.phone}</div>}
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="p-2 border-t border-white/5">
+                  <button
+                    onClick={() => setShowClientDrop(false)}
+                    className="w-full text-white/30 hover:text-white text-xs py-1.5 flex items-center justify-center gap-1"
+                  >
+                    <X className="w-3 h-3" /> Fermer
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Badge client pré-sélectionné */}
+        {preselectedClient && clientNom === preselectedClient.nom && (
+          <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5">
+            <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-emerald-400 text-xs font-medium">Client pré-rempli depuis la liste</span>
+          </div>
+        )}
+
+        {/* Badge produit pré-sélectionné */}
+        {preselectedProduct && lignes.length > 0 && lignes[0].designation === preselectedProduct.nom && (
+          <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-1.5">
+            <Package className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-blue-400 text-xs font-medium">Produit pré-rempli depuis le catalogue</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Nom du client *</label>
             <input
               value={clientNom}
               onChange={e => setClientNom(e.target.value)}
-              placeholder="M. Abdou Diallo / Société XYZ"
-              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20"
+              placeholder="M. Abdou Diallo"
+              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
             />
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Téléphone</label>
-              <input
-                value={clientPhone}
-                onChange={e => setClientPhone(e.target.value)}
-                placeholder="+221 77 000 00 00"
-                className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20"
-              />
-            </div>
-            <div>
-              <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Date facture</label>
-              <input
-                type="date"
-                value={dateFacture}
-                onChange={e => setDateFacture(e.target.value)}
-                className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
-              />
-            </div>
+          <div>
+            <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Téléphone</label>
+            <input
+              value={clientPhone}
+              onChange={e => setClientPhone(e.target.value)}
+              placeholder="+221 77 000 00 00"
+              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
+            />
           </div>
-
+          <div>
+            <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Email</label>
+            <input
+              value={clientEmail}
+              onChange={e => setClientEmail(e.target.value)}
+              placeholder="client@example.com"
+              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
+            />
+          </div>
           <div>
             <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Adresse</label>
             <input
               value={clientAdresse}
               onChange={e => setClientAdresse(e.target.value)}
               placeholder="Cité Keur Gorgui, Dakar"
-              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20"
-            />
-          </div>
-        </div>
-
-        {/* TVA + notes */}
-        <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-6 space-y-4">
-          <h3 className="text-white font-bold text-base flex items-center gap-2">
-            <span className="w-6 h-6 bg-emerald-500/20 text-emerald-400 rounded-md flex items-center justify-center text-xs font-black">2</span>
-            TVA &amp; Notes
-          </h3>
-
-          <div>
-            <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">TVA (%)</label>
-            <div className="relative">
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.5"
-                value={tvaPct}
-                onChange={e => setTvaPct(e.target.value)}
-                className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
-              />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
-                {['0', '10', '18'].map(v => (
-                  <button
-                    key={v}
-                    onClick={() => setTvaPct(v)}
-                    className={`text-xs px-1.5 py-0.5 rounded transition ${tvaPct === v ? 'bg-emerald-500 text-white' : 'bg-white/10 text-white/40 hover:bg-white/20'}`}
-                  >
-                    {v}%
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Notes / Conditions</label>
-            <textarea
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              rows={4}
-              placeholder="Paiement sous 30 jours. Merci pour votre confiance."
-              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 resize-none text-sm"
+              className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
             />
           </div>
         </div>
       </div>
 
-      {/* ── Lignes produits ─────────────────────────────────────────────────── */}
+      {/* ── Tableau des lignes ─────────────────────────────────────── */}
       <div className="bg-[#0d1627] border border-white/5 rounded-2xl overflow-hidden">
-        <div className="flex items-center justify-between p-5 border-b border-white/5">
-          <h3 className="text-white font-bold text-base flex items-center gap-2">
-            <span className="w-6 h-6 bg-emerald-500/20 text-emerald-400 rounded-md flex items-center justify-center text-xs font-black">3</span>
-            Produits ({lignes.length} ligne{lignes.length !== 1 ? 's' : ''})
-          </h3>
-          <button
-            onClick={() => setShowProdModal(true)}
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-bold px-4 py-2 rounded-xl transition"
-          >
-            <Plus className="w-4 h-4" /> Ajouter un produit
-          </button>
+        <div className="p-5 border-b border-white/5">
+          <h3 className="text-white font-bold text-sm uppercase tracking-wider">Lignes de facturation</h3>
         </div>
 
-        {lignes.length === 0 ? (
-          <div className="text-center py-12 text-white/20">
-            <FileText className="w-10 h-10 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">Aucun produit ajouté. Cliquez sur "Ajouter un produit".</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-white/[0.02]">
-                <tr>
-                  {['Désignation *', 'Couleur / Format', 'Qté (m²)', 'Prix/m² (F)', 'Total (F)', ''].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {lignes.map((l, idx) => (
-                  <tr key={idx} className="border-t border-white/[0.03]">
-                    {/* Désignation — toujours éditable */}
-                    <td className="px-4 py-3 min-w-[180px]">
-                      <input
-                        value={l.designation}
-                        onChange={e => updateDesignation(idx, e.target.value)}
-                        placeholder="Désignation *"
-                        className={`w-full bg-[#060d1a] text-white rounded-lg px-3 py-1.5 border focus:outline-none focus:border-emerald-500 transition text-sm placeholder-white/20 ${
-                          !l.designation.trim() ? 'border-red-500/50' : 'border-white/10'
-                        }`}
-                      />
-                      {l.reference && (
-                        <div className="text-white/30 text-xs mt-1 pl-1">Réf: {l.reference}</div>
-                      )}
-                    </td>
-
-                    {/* Couleur / Format */}
-                    <td className="px-4 py-3 text-white/40 text-sm whitespace-nowrap">
-                      {[l.couleur, l.format].filter(Boolean).join(' · ') || '—'}
-                    </td>
-
-                    {/* Quantité */}
-                    <td className="px-4 py-3">
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={l.quantite_m2}
-                        onChange={e => updateQte(idx, e.target.value)}
-                        className="w-24 bg-[#060d1a] text-white rounded-lg px-3 py-1.5 border border-white/10 focus:outline-none focus:border-emerald-500 transition text-sm"
-                      />
-                    </td>
-
-                    {/* Prix — toujours à saisir manuellement */}
-                    <td className="px-4 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={l.prix_unitaire || ''}
-                        onChange={e => updatePrix(idx, e.target.value)}
-                        placeholder="Prix"
-                        className={`w-32 bg-[#060d1a] text-white rounded-lg px-3 py-1.5 border focus:outline-none focus:border-emerald-500 transition text-sm placeholder-white/20 ${
-                          l.prix_unitaire === 0 ? 'border-amber-500/40' : 'border-white/10'
-                        }`}
-                      />
-                    </td>
-
-                    {/* Total */}
-                    <td className="px-4 py-3 text-emerald-400 font-bold text-sm whitespace-nowrap">
-                      {fmt(l.total_ligne)} F
-                    </td>
-
-                    {/* Supprimer */}
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => removeLigne(idx)}
-                        className="text-white/20 hover:text-red-400 transition p-1"
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-white/5 bg-[#060d1a]">
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[160px]">Désignation</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[100px]">Référence</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Couleur</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Format</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[80px]">Qté (m²)</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Prix/m²</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[80px]">Remise %</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[100px]">Total</th>
+                <th className="px-3 py-3 w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {lignes.map((l, i) => (
+                <tr key={l.id} className={`border-b border-white/[0.03] ${i % 2 ? 'bg-white/[0.01]' : ''}`}>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const p = produits.find(x => x.id === e.target.value);
+                            if (p) {
+                              updateLigne(l.id, {
+                                designation: p.nom,
+                                reference: p.reference || l.reference,
+                                couleur: p.couleur || l.couleur,
+                                format: p.format || l.format,
+                                prix_unitaire: p.prix_unitaire || l.prix_unitaire,
+                              });
+                            }
+                            e.target.value = '';
+                          }
+                        }}
+                        className="flex-1 bg-[#060d1a] text-white text-xs rounded-lg px-1.5 py-1 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
                       >
+                        <option value="">← Prod. existant</option>
+                        {produits.map(p => (
+                          <option key={p.id} value={p.id}>{p.nom}</option>
+                        ))}
+                      </select>
+                      <input 
+                        value={l.designation} 
+                        onChange={e => updateLigne(l.id, { designation: e.target.value })}
+                        placeholder="Ex: Carrelage sol"
+                        className="flex-1 bg-transparent text-white placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
+                      />
+                    </div>
+                   </td>
+                  <td className="px-3 py-2">
+                    <input 
+                      value={l.reference} 
+                      onChange={e => updateLigne(l.id, { reference: e.target.value })}
+                      placeholder="Réf."
+                      className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
+                    />
+                   </td>
+                  <td className="px-3 py-2">
+                    <input 
+                      value={l.couleur} 
+                      onChange={e => updateLigne(l.id, { couleur: e.target.value })}
+                      placeholder="Beige"
+                      className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
+                    />
+                   </td>
+                  <td className="px-3 py-2">
+                    <input 
+                      value={l.format} 
+                      onChange={e => updateLigne(l.id, { format: e.target.value })}
+                      placeholder="60x60"
+                      className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
+                    />
+                   </td>
+                  <td className="px-3 py-2">
+                    <input 
+                      type="number" min="0" step="0.01"
+                      value={l.quantite_m2}
+                      onChange={e => updateLigne(l.id, { quantite_m2: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
+                    />
+                   </td>
+                  <td className="px-3 py-2">
+                    <input 
+                      type="number" min="0"
+                      value={l.prix_unitaire}
+                      onChange={e => updateLigne(l.id, { prix_unitaire: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
+                    />
+                   </td>
+                  <td className="px-3 py-2">
+                    <div className="relative">
+                      <input
+                        type="number" min="0" max="100" step="0.5"
+                        value={l.remise_pct}
+                        onChange={e => updateLigne(l.id, { remise_pct: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) })}
+                        className="w-full bg-transparent text-amber-400 text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-amber-500/30 transition pr-5"
+                      />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 text-xs pointer-events-none">%</span>
+                    </div>
+                    {l.remise_pct > 0 && (
+                      <div className="text-xs text-amber-500/60 text-right pr-2 mt-0.5">
+                        - {fmt(l.quantite_m2 * l.prix_unitaire * l.remise_pct / 100)} F
+                      </div>
+                    )}
+                   </td>
+                  <td className="px-3 py-2 text-right">
+                    <span className={`font-bold ${l.remise_pct > 0 ? 'text-emerald-400' : 'text-white'}`}>
+                      {fmt(l.total_ligne)} F
+                    </span>
+                   </td>
+                  <td className="px-3 py-2">
+                    {lignes.length > 1 && (
+                      <button onClick={() => removeLigne(l.id)}
+                        className="text-white/20 hover:text-red-400 transition p-1 rounded">
                         <Trash2 className="w-4 h-4" />
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                    )}
+                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-        {/* Totaux */}
-        {lignes.length > 0 && (
-          <div className="border-t border-white/5 p-5 flex justify-end">
-            <div className="w-64 space-y-2 text-sm">
-              <div className="flex justify-between text-white/50">
-                <span>Sous-total HT</span>
-                <span>{fmt(calculs.sousTotal)} F</span>
-              </div>
-              {parseFloat(tvaPct) > 0 && (
-                <div className="flex justify-between text-white/50">
-                  <span>TVA ({tvaPct}%)</span>
-                  <span>{fmt(calculs.tvaMontant)} F</span>
-                </div>
-              )}
-              <div className="flex justify-between text-white font-black text-base border-t border-white/10 pt-2">
-                <span>TOTAL TTC</span>
-                <span className="text-emerald-400">{fmt(calculs.totalTTC)} F</span>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Bouton ajout ligne */}
+        <div className="p-4 border-t border-white/5">
+          <button onClick={addLigne}
+            className="inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-300 text-sm font-medium transition">
+            <Plus className="w-4 h-4" /> Ajouter une ligne
+          </button>
+        </div>
       </div>
 
-      {/* ── Actions ─────────────────────────────────────────────────────────── */}
-      <div className="flex gap-3 pb-8">
+      {/* ── Totaux + options ─────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Notes */}
+        <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5">
+          <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-2 block">Notes / Conditions</label>
+          <textarea 
+            value={notes} 
+            onChange={e => setNotes(e.target.value)}
+            rows={4} 
+            placeholder="Conditions de paiement, délais de livraison…"
+            className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm resize-none" 
+          />
+        </div>
+
+        {/* Récapitulatif */}
+        <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <label className="text-white/40 text-xs font-bold uppercase tracking-wider">Remise à déduire</label>
+            <div className="relative w-32">
+              <input 
+                type="number" min="0" step="0.01"
+                value={remiseMontant}
+                onChange={e => setRemiseMontant(Math.max(0, parseFloat(e.target.value) || 0))}
+                className="w-full bg-[#060d1a] text-amber-400 text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-amber-500/40 transition pr-7 text-sm" 
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 text-xs">F</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <label className="text-white/40 text-xs font-bold uppercase tracking-wider">TVA</label>
+            <div className="relative w-28">
+              <input 
+                type="number" min="0" max="100" step="0.5"
+                value={tvaPct}
+                onChange={e => setTvaPct(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                className="w-full bg-[#060d1a] text-white text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 transition pr-7 text-sm" 
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 text-xs">%</span>
+            </div>
+          </div>
+
+          <div className="border-t border-white/5 pt-4 space-y-2">
+            <div className="flex justify-between text-sm text-white/50">
+              <span>Sous-total HT</span>
+              <span>{fmt(sousTotal)} F</span>
+            </div>
+            {remiseMontant > 0 && (
+              <div className="flex justify-between text-sm text-amber-400">
+                <span>Remise à déduire</span>
+                <span>- {fmt(remiseMontant)} F</span>
+              </div>
+            )}
+            {tvaPct > 0 && (
+              <div className="flex justify-between text-sm text-white/50">
+                <span>TVA ({tvaPct}%)</span>
+                <span>{fmt(tvaMontant)} F</span>
+              </div>
+            )}
+            <div className="flex justify-between font-black text-lg text-white border-t border-white/10 pt-3 mt-1">
+              <span>TOTAL TTC</span>
+              <span className="text-emerald-400">{fmt(totalTTC)} F CFA</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Boutons de sauvegarde ────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row gap-3 justify-end pb-8">
         <button
           onClick={() => handleSave('brouillon')}
-          disabled={saving}
-          className="flex-1 sm:flex-none border border-white/10 hover:border-white/30 text-white/60 hover:text-white font-medium px-6 py-3.5 rounded-xl transition disabled:opacity-50"
+          disabled={saving || !clientNom.trim()}
+          className="inline-flex items-center justify-center gap-2 border border-white/10 text-white/60 hover:text-white hover:border-white/20 disabled:opacity-40 font-bold px-6 py-3 rounded-xl transition text-sm"
         >
-          {saving ? 'Sauvegarde...' : 'Sauvegarder en brouillon'}
+          <Save className="w-4 h-4" /> Enregistrer en brouillon
         </button>
         <button
           onClick={() => handleSave('emise')}
-          disabled={saving}
-          className="flex-1 sm:flex-none bg-emerald-500 hover:bg-emerald-400 text-white font-bold px-8 py-3.5 rounded-xl transition hover:shadow-[0_0_20px_rgba(16,185,129,0.4)] disabled:opacity-50 flex items-center justify-center gap-2"
+          disabled={saving || !clientNom.trim() || lignes.every(l => !l.designation.trim())}
+          className="inline-flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-white font-bold px-8 py-3 rounded-xl transition text-sm shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_25px_rgba(16,185,129,0.4)]"
         >
-          <Check className="w-5 h-5" />
-          {saving ? '...' : 'Émettre la facture'}
+          {saving ? 'Enregistrement…' : <><Save className="w-4 h-4" /> Émettre la facture</>}
         </button>
       </div>
-
-      {/* ── Modal sélection produit ─────────────────────────────────────────── */}
-      {showProdModal && (
-        <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
-          onClick={() => { setShowProdModal(false); setSearchProd(''); }}
-        >
-          <div
-            className="bg-[#0d1627] border border-white/10 rounded-2xl w-full max-w-lg max-h-[75vh] flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="p-5 border-b border-white/5">
-              <h3 className="text-white font-bold mb-3">Ajouter un produit</h3>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                <input
-                  autoFocus
-                  value={searchProd}
-                  onChange={e => setSearchProd(e.target.value)}
-                  placeholder="Rechercher dans le catalogue..."
-                  className="w-full bg-[#060d1a] text-white rounded-xl pl-9 pr-4 py-2.5 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20"
-                />
-              </div>
-            </div>
-
-            <div className="overflow-y-auto flex-1 p-3 space-y-1">
-              {/* Ligne manuelle */}
-              <button
-                onClick={addLigneManuelle}
-                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-emerald-500/10 border border-dashed border-white/10 hover:border-emerald-500/30 transition text-left mb-2"
-              >
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center shrink-0">
-                  <Plus className="w-4 h-4 text-emerald-400" />
-                </div>
-                <div>
-                  <div className="text-emerald-400 font-semibold text-sm">Ligne manuelle</div>
-                  <div className="text-white/30 text-xs">Saisir désignation et prix manuellement</div>
-                </div>
-              </button>
-
-              {/* Séparateur */}
-              {filteredProduits.length > 0 && (
-                <div className="flex items-center gap-2 py-1 px-1">
-                  <div className="flex-1 h-px bg-white/5" />
-                  <span className="text-white/20 text-xs uppercase tracking-wider">Catalogue</span>
-                  <div className="flex-1 h-px bg-white/5" />
-                </div>
-              )}
-
-              {/* Produits catalogue */}
-              {filteredProduits.length === 0 && searchProd && (
-                <p className="text-center text-white/30 py-6 text-sm">Aucun produit trouvé dans le catalogue</p>
-              )}
-              {filteredProduits.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => addLigneFromCatalogue(p)}
-                  className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition text-left"
-                >
-                  <div>
-                    <div className="text-white font-medium text-sm">{p.nom}</div>
-                    <div className="text-white/30 text-xs mt-0.5">
-                      {[p.reference, p.couleur, p.format].filter(Boolean).join(' · ')}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0 ml-4">
-                    <div className="text-white/40 text-xs">Catalogue</div>
-                    <div className={`text-xs mt-0.5 ${p.stock_m2 <= p.seuil_alerte ? 'text-amber-400' : 'text-white/30'}`}>
-                      Stock: {fmt(p.stock_m2)} m²
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
