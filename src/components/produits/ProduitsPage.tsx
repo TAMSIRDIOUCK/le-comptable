@@ -15,16 +15,20 @@ const fmt = (v: number) => new Intl.NumberFormat('fr-FR').format(v);
 interface FormState {
   nom: string; reference: string; categorie: string; couleur: string;
   format: string; stock_m2: string; prix_m2: string; seuil_alerte: string;
+  customCouleur: string;  // ← Nouveau champ pour couleur personnalisée
+  customFormat: string;   // ← Nouveau champ pour format personnalisé
 }
 const emptyForm: FormState = {
   nom: '',
   reference: '',
-  categorie: 'Carrelage Sol',  // valeur par défaut mais non obligatoire
+  categorie: 'Carrelage Sol',
   couleur: 'Beige',
   format: '60x60',
   stock_m2: '',
   prix_m2: '',
-  seuil_alerte: '10'           // valeur par défaut
+  seuil_alerte: '10',
+  customCouleur: '',   // ← Initialisation
+  customFormat: ''     // ← Initialisation
 };
 
 export default function ProduitsPage({ userId }: ProduitsPageProps) {
@@ -57,19 +61,41 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
       format: p.format ?? '60x60',
       stock_m2: p.stock_m2 !== undefined ? String(p.stock_m2) : '',
       prix_m2: p.prix_m2 !== undefined ? String(p.prix_m2) : '',
-      seuil_alerte: String(p.seuil_alerte ?? 10)
+      seuil_alerte: String(p.seuil_alerte ?? 10),
+      customCouleur: '',
+      customFormat: ''
     });
     setShowModal(true);
   };
 
   const handleSave = async () => {
     // Validation : seulement nom, couleur et format sont obligatoires
-    if (!form.nom.trim() || !form.couleur || !form.format) {
-      alert('Veuillez remplir tous les champs obligatoires : Désignation, Couleur, Format.');
+    if (!form.nom.trim()) {
+      alert('Veuillez remplir la désignation.');
       return;
     }
+    
+    // Gestion de la couleur
+    let finalCouleur = form.couleur;
+    if (form.couleur === 'Autres') {
+      if (!form.customCouleur.trim()) {
+        alert('Veuillez saisir une couleur personnalisée.');
+        return;
+      }
+      finalCouleur = form.customCouleur.trim();
+    }
+    
+    // Gestion du format
+    let finalFormat = form.format;
+    if (form.format === 'Autre') {
+      if (!form.customFormat.trim()) {
+        alert('Veuillez saisir un format personnalisé.');
+        return;
+      }
+      finalFormat = form.customFormat.trim();
+    }
+    
     setSaving(true);
-    // Conversion : stock et prix optionnels → 0 si vide
     const stock = form.stock_m2 === '' ? 0 : parseFloat(form.stock_m2);
     const prix = form.prix_m2 === '' ? 0 : parseFloat(form.prix_m2);
     const seuil = form.seuil_alerte === '' ? 10 : parseFloat(form.seuil_alerte);
@@ -78,15 +104,17 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
       nom: form.nom.trim(),
       reference: form.reference.trim() || null,
       categorie: form.categorie || null,
-      couleur: form.couleur,
-      format: form.format,
+      couleur: finalCouleur,
+      format: finalFormat,
       stock_m2: isNaN(stock) ? 0 : stock,
       prix_m2: isNaN(prix) ? 0 : prix,
+      prix_unitaire: isNaN(prix) ? 0 : prix,  // Synchronisation pour NouvelleVentePage
       seuil_alerte: isNaN(seuil) ? 10 : seuil,
       user_id: userId,
       actif: true,
       updated_at: new Date().toISOString(),
     };
+    
     if (editing) {
       await supabase.from('produits_comptable').update(payload).eq('id', editing.id);
     } else {
@@ -124,7 +152,7 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
         </button>
       </div>
 
-      {/* Alertes stock bas (uniquement si stock >0 et <= seuil) */}
+      {/* Alertes stock bas */}
       {produits.filter(p => p.stock_m2 > 0 && p.stock_m2 <= p.seuil_alerte).length > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
@@ -232,22 +260,23 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
               <button onClick={() => setShowModal(false)} className="text-white/30 hover:text-white transition"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-4">
-              {/* Désignation (obligatoire) */}
+              {/* Désignation */}
               <div>
                 <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Désignation *</label>
                 <input value={form.nom} onChange={e => setForm(f => ({...f, nom: e.target.value}))}
                   placeholder="Ex: Carrelage Sol Beige Sable 60x60"
                   className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
               </div>
+              
               <div className="grid grid-cols-2 gap-3">
-                {/* Référence (optionnel) */}
+                {/* Référence */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Référence (optionnel)</label>
                   <input value={form.reference} onChange={e => setForm(f => ({...f, reference: e.target.value}))}
                     placeholder="REF-001"
                     className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
                 </div>
-                {/* Catégorie (optionnel) */}
+                {/* Catégorie */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Catégorie (optionnel)</label>
                   <select value={form.categorie} onChange={e => setForm(f => ({...f, categorie: e.target.value}))}
@@ -257,40 +286,79 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
                   </select>
                 </div>
               </div>
+              
               <div className="grid grid-cols-2 gap-3">
-                {/* Couleur (obligatoire) */}
+                {/* Couleur */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Couleur *</label>
-                  <select value={form.couleur} onChange={e => setForm(f => ({...f, couleur: e.target.value}))}
-                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition">
+                  <select 
+                    value={form.couleur} 
+                    onChange={e => {
+                      setForm(f => ({...f, couleur: e.target.value}));
+                      if (e.target.value !== 'Autres') {
+                        setForm(f => ({...f, customCouleur: ''}));
+                      }
+                    }}
+                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
+                  >
                     {COULEURS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
+                  {form.couleur === 'Autres' && (
+                    <input 
+                      type="text"
+                      value={form.customCouleur}
+                      onChange={e => setForm(f => ({...f, customCouleur: e.target.value}))}
+                      placeholder="Saisissez la couleur personnalisée"
+                      className="w-full mt-2 bg-[#060d1a] text-white rounded-xl px-4 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
+                      autoFocus
+                    />
+                  )}
                 </div>
-                {/* Format (obligatoire) */}
+                
+                {/* Format */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Format (cm) *</label>
-                  <select value={form.format} onChange={e => setForm(f => ({...f, format: e.target.value}))}
-                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition">
+                  <select 
+                    value={form.format} 
+                    onChange={e => {
+                      setForm(f => ({...f, format: e.target.value}));
+                      if (e.target.value !== 'Autre') {
+                        setForm(f => ({...f, customFormat: ''}));
+                      }
+                    }}
+                    className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
+                  >
                     {FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
+                  {form.format === 'Autre' && (
+                    <input 
+                      type="text"
+                      value={form.customFormat}
+                      onChange={e => setForm(f => ({...f, customFormat: e.target.value}))}
+                      placeholder="Saisissez le format personnalisé (ex: 45x90)"
+                      className="w-full mt-2 bg-[#060d1a] text-white rounded-xl px-4 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm"
+                      autoFocus
+                    />
+                  )}
                 </div>
               </div>
+              
               <div className="grid grid-cols-3 gap-3">
-                {/* Stock (optionnel) */}
+                {/* Stock */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Stock (m²) (optionnel)</label>
                   <input type="number" min="0" step="0.01" value={form.stock_m2} onChange={e => setForm(f => ({...f, stock_m2: e.target.value}))}
                     placeholder="0"
                     className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
                 </div>
-                {/* Prix/m² (optionnel) */}
+                {/* Prix/m² */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Prix/m² (F) (optionnel)</label>
                   <input type="number" min="0" value={form.prix_m2} onChange={e => setForm(f => ({...f, prix_m2: e.target.value}))}
                     placeholder="12500"
                     className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20" />
                 </div>
-                {/* Seuil alerte (optionnel) */}
+                {/* Seuil alerte */}
                 <div>
                   <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1.5 block">Seuil alerte (optionnel)</label>
                   <input type="number" min="0" value={form.seuil_alerte} onChange={e => setForm(f => ({...f, seuil_alerte: e.target.value}))}
@@ -298,11 +366,11 @@ export default function ProduitsPage({ userId }: ProduitsPageProps) {
                     className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition" />
                 </div>
               </div>
-              <p className="text-white/30 text-xs mt-2">* Champs obligatoires : Désignation, Couleur, Format</p>
+              <p className="text-white/30 text-xs mt-2">* Champs obligatoires : Désignation</p>
             </div>
             <div className="px-6 pb-6 flex gap-3">
               <button onClick={() => setShowModal(false)} className="flex-1 border border-white/10 text-white/50 hover:text-white py-3 rounded-xl font-medium transition">Annuler</button>
-              <button onClick={handleSave} disabled={saving || !form.nom.trim() || !form.couleur || !form.format}
+              <button onClick={handleSave} disabled={saving || !form.nom.trim()}
                 className="flex-1 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-white py-3 rounded-xl font-bold transition flex items-center justify-center gap-2">
                 {saving ? '...' : <><Check className="w-4 h-4" /> {editing ? 'Modifier' : 'Ajouter'}</>}
               </button>
