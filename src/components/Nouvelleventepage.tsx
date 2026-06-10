@@ -1,8 +1,8 @@
-// src/components/NouvelleVentePage.tsx
+// src/components/Nouvelleventepage.tsx
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import {
-  Plus, Trash2, Save, ChevronDown, X, UserCheck, Search, Package
+  Plus, Trash2, Save, ChevronDown, X, UserCheck, Search,
 } from 'lucide-react';
 import type { Client } from '../types';
 
@@ -14,7 +14,7 @@ interface Produit {
   couleur: string;
   format: string;
   prix_unitaire: number;
-  prix_m2?: number;  // Ajout pour compatibilité
+  stock_m2: number;
 }
 
 interface Ligne {
@@ -27,82 +27,213 @@ interface Ligne {
   prix_unitaire: number;
   remise_pct: number;
   total_ligne: number;
+  produit_id?: string;
 }
 
 interface NouvelleVentePageProps {
   userId: string;
   onFactureCreee: (factureId: string) => void;
   preselectedClient?: Client | null;
-  preselectedProduct?: Produit | null;  // ← Nouvelle prop ajoutée
 }
 
 /* ─── Helpers ────────────────────────────────────────────────────── */
-const uid  = () => Math.random().toString(36).slice(2);
-const fmt  = (v: number) => new Intl.NumberFormat('fr-FR').format(Math.round(v));
+const uid = () => Math.random().toString(36).slice(2);
+const fmt = (v: number) => new Intl.NumberFormat('fr-FR').format(Math.round(v));
 
 function makeLigne(): Ligne {
-  return { 
-    id: uid(), 
-    designation: '', 
-    reference: '', 
-    couleur: '', 
-    format: '', 
-    quantite_m2: 1, 
-    prix_unitaire: 0, 
-    remise_pct: 0, 
-    total_ligne: 0 
+  return {
+    id: uid(),
+    designation: '',
+    reference: '',
+    couleur: '',
+    format: '',
+    quantite_m2: 1,
+    prix_unitaire: 0,
+    remise_pct: 0,
+    total_ligne: 0,
+    produit_id: undefined,
   };
 }
 
 function computeLigne(l: Ligne): Ligne {
-  const brut   = l.quantite_m2 * l.prix_unitaire;
+  const brut = l.quantite_m2 * l.prix_unitaire;
   const remise = brut * (l.remise_pct / 100);
   return { ...l, total_ligne: Math.max(0, brut - remise) };
 }
 
-/* ─── Composant ──────────────────────────────────────────────────── */
-export default function NouvelleVentePage({ 
-  userId, 
-  onFactureCreee, 
-  preselectedClient,
-  preselectedProduct  // ← Nouvelle prop déstructurée
-}: NouvelleVentePageProps) {
-  /* Client */
-  const [clients, setClients]             = useState<Client[]>([]);
-  const [clientSearch, setClientSearch]   = useState('');
+// Classe CSS pour supprimer les flèches des inputs number
+const noSpinnerClass = "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
+/* ─── Fonctions exportées pour la gestion du stock ───────────────── */
+export const updateStockForPaidInvoice = async (factureId: string, userId: string) => {
+  try {
+    console.log(`📦 Mise à jour du stock pour la facture ${factureId}`);
+    
+    const { data: lignes, error: lignesError } = await supabase
+      .from('facture_lignes_comptable')
+      .select('*')
+      .eq('facture_id', factureId);
+
+    if (lignesError) throw lignesError;
+    if (!lignes || lignes.length === 0) {
+      console.log('Aucune ligne trouvée pour cette facture');
+      return;
+    }
+
+    console.log(`📋 ${lignes.length} ligne(s) à traiter`);
+
+    for (const ligne of lignes) {
+      console.log(`🔍 Traitement: ${ligne.designation} - Quantité: ${ligne.quantite_m2}`);
+      
+      const { data: produit, error: produitError } = await supabase
+        .from('produits_comptable')
+        .select('id, nom, stock_m2')
+        .ilike('nom', ligne.designation.trim())
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (produitError) {
+        console.error(`❌ Erreur recherche produit ${ligne.designation}:`, produitError);
+        continue;
+      }
+
+      if (!produit) {
+        console.warn(`⚠️ Produit non trouvé: "${ligne.designation}"`);
+        continue;
+      }
+
+      console.log(`✅ Produit trouvé: ${produit.nom} (stock actuel: ${produit.stock_m2})`);
+
+      const nouveauStock = Math.max(0, (produit.stock_m2 || 0) - ligne.quantite_m2);
+      
+      const { error: updateError } = await supabase
+        .from('produits_comptable')
+        .update({
+          stock_m2: nouveauStock,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', produit.id);
+
+      if (updateError) {
+        console.error(`❌ Erreur mise à jour stock pour ${produit.nom}:`, updateError);
+      } else {
+        console.log(`📉 Stock mis à jour: ${produit.stock_m2} → ${nouveauStock} (baisse de ${ligne.quantite_m2})`);
+      }
+    }
+    
+    console.log(`✅ Mise à jour du stock terminée pour la facture ${factureId}`);
+  } catch (err) {
+    console.error('❌ Erreur mise à jour stock:', err);
+    throw err;
+  }
+};
+
+export const restoreStockForCancelledInvoice = async (factureId: string, userId: string) => {
+  try {
+    console.log(`🔄 RESTAURATION du stock pour la facture annulée ${factureId}`);
+    
+    const { data: lignes, error: lignesError } = await supabase
+      .from('facture_lignes_comptable')
+      .select('*')
+      .eq('facture_id', factureId);
+
+    if (lignesError) throw lignesError;
+    if (!lignes || lignes.length === 0) {
+      console.log('Aucune ligne trouvée pour cette facture');
+      return;
+    }
+
+    console.log(`📋 ${lignes.length} ligne(s) à restaurer`);
+
+    for (const ligne of lignes) {
+      console.log(`🔍 Recherche du produit: "${ligne.designation}"`);
+      
+      let { data: produit, error: produitError } = await supabase
+        .from('produits_comptable')
+        .select('id, nom, stock_m2')
+        .ilike('nom', ligne.designation.trim())
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (produitError) {
+        console.error(`❌ Erreur recherche produit ${ligne.designation}:`, produitError);
+        continue;
+      }
+
+      if (!produit) {
+        console.log(`⚠️ Produit non trouvé exactement, tentative avec recherche élargie...`);
+        const { data: produitLarge, error: largeError } = await supabase
+          .from('produits_comptable')
+          .select('id, nom, stock_m2')
+          .ilike('nom', `%${ligne.designation}%`)
+          .eq('user_id', userId)
+          .maybeSingle();
+        
+        if (largeError || !produitLarge) {
+          console.error(`❌ Produit toujours non trouvé: ${ligne.designation}`);
+          continue;
+        }
+        
+        produit = produitLarge;
+        console.log(`✅ Produit trouvé par recherche élargie: ${produit.nom}`);
+      } else {
+        console.log(`✅ Produit trouvé: ${produit.nom} (stock actuel: ${produit.stock_m2})`);
+      }
+
+      const nouveauStock = (produit.stock_m2 || 0) + ligne.quantite_m2;
+      
+      const { error: updateError } = await supabase
+        .from('produits_comptable')
+        .update({
+          stock_m2: nouveauStock,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', produit.id);
+
+      if (updateError) {
+        console.error(`❌ Erreur restauration stock pour ${produit.nom}:`, updateError);
+      } else {
+        console.log(`📈 Stock restauré: ${produit.stock_m2} → ${nouveauStock} (hausse de ${ligne.quantite_m2})`);
+      }
+    }
+    
+    console.log(`✅ Restauration du stock terminée pour la facture ${factureId}`);
+  } catch (err) {
+    console.error('❌ Erreur restauration stock:', err);
+    throw err;
+  }
+};
+
+/* ─── Composant principal ────────────────────────────────────────── */
+export default function NouvelleVentePage({ userId, onFactureCreee, preselectedClient }: NouvelleVentePageProps) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientSearch, setClientSearch] = useState('');
   const [showClientDrop, setShowClientDrop] = useState(false);
-  const [clientNom, setClientNom]         = useState(preselectedClient?.nom     ?? '');
-  const [clientPhone, setClientPhone]     = useState(preselectedClient?.phone   ?? '');
-  const [clientEmail, setClientEmail]     = useState(preselectedClient?.email   ?? '');
+  const [clientNom, setClientNom] = useState(preselectedClient?.nom ?? '');
+  const [clientPhone, setClientPhone] = useState(preselectedClient?.phone ?? '');
+  const [clientEmail, setClientEmail] = useState(preselectedClient?.email ?? '');
   const [clientAdresse, setClientAdresse] = useState(preselectedClient?.adresse ?? '');
-
-  /* Produits */
   const [produits, setProduits] = useState<Produit[]>([]);
-
-  /* Lignes */
-  const [lignes, setLignes]   = useState<Ligne[]>([makeLigne()]);
-
-  /* Options facture */
+  const [lignes, setLignes] = useState<Ligne[]>([makeLigne()]);
   const [remiseMontant, setRemiseMontant] = useState(0);
-  const [tvaPct,    setTvaPct]    = useState(0);
-  const [notes,     setNotes]     = useState('');
-  const [saving,    setSaving]    = useState(false);
+  const [tvaPct, setTvaPct] = useState(0);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  /* Chargement des clients et produits */
   const loadClients = useCallback(async () => {
     const { data } = await supabase.from('clients_comptable').select('*').eq('user_id', userId).order('nom');
     setClients(data || []);
   }, [userId]);
 
   const loadProduits = useCallback(async () => {
-    const { data } = await supabase.from('produits_comptable').select('*').eq('user_id', userId).order('nom');
+    const { data } = await supabase.from('produits_comptable').select('*').eq('user_id', userId).eq('actif', true).order('nom');
     setProduits(data || []);
   }, [userId]);
 
   useEffect(() => { loadClients(); }, [loadClients]);
   useEffect(() => { loadProduits(); }, [loadProduits]);
 
-  /* Pré-remplissage si client transmis depuis ClientsPage */
   useEffect(() => {
     if (preselectedClient) {
       setClientNom(preselectedClient.nom);
@@ -112,43 +243,17 @@ export default function NouvelleVentePage({
     }
   }, [preselectedClient]);
 
-  /* Pré-remplissage si produit transmis depuis ProduitsPage */
-  useEffect(() => {
-    if (preselectedProduct && produits.length > 0) {
-      // Récupérer le produit complet depuis la liste
-      const fullProduct = produits.find(p => p.id === preselectedProduct.id);
-      if (fullProduct) {
-        const prix = fullProduct.prix_unitaire || fullProduct.prix_m2 || 0;
-        const newLigne: Ligne = {
-          id: uid(),
-          designation: fullProduct.nom,
-          reference: fullProduct.reference || '',
-          couleur: fullProduct.couleur || '',
-          format: fullProduct.format || '',
-          quantite_m2: 1,
-          prix_unitaire: prix,
-          remise_pct: 0,
-          total_ligne: prix,
-        };
-        setLignes([newLigne]);
-      }
-    }
-  }, [preselectedProduct, produits]);
-
-  /* ── Gestion des lignes ────────────────────────────────────────── */
   const updateLigne = (id: string, patch: Partial<Ligne>) => {
     setLignes(prev => prev.map(l => l.id === id ? computeLigne({ ...l, ...patch }) : l));
   };
-  const addLigne    = () => setLignes(prev => [...prev, makeLigne()]);
+  const addLigne = () => setLignes(prev => [...prev, makeLigne()]);
   const removeLigne = (id: string) => setLignes(prev => prev.filter(l => l.id !== id));
 
-  /* ── Calculs totaux ────────────────────────────────────────────── */
-  const sousTotal      = lignes.reduce((s, l) => s + l.total_ligne, 0);
-  const apresRemise    = Math.max(0, sousTotal - remiseMontant);
-  const tvaMontant     = apresRemise * (tvaPct / 100);
-  const totalTTC       = apresRemise + tvaMontant;
+  const sousTotal = lignes.reduce((s, l) => s + l.total_ligne, 0);
+  const apresRemise = Math.max(0, sousTotal - remiseMontant);
+  const tvaMontant = apresRemise * (tvaPct / 100);
+  const totalTTC = apresRemise + tvaMontant;
 
-  /* ── Sélection client depuis le dropdown ──────────────────────── */
   const handleSelectClient = (c: Client) => {
     setClientNom(c.nom);
     setClientPhone(c.phone ?? '');
@@ -163,89 +268,161 @@ export default function NouvelleVentePage({
     return !q || c.nom.toLowerCase().includes(q) || (c.phone ?? '').toLowerCase().includes(q);
   });
 
-  /* ── Numéro de facture ────────────────────────────────────────── */
-  const genNumero = async (): Promise<string> => {
-    const { count } = await supabase
-      .from('factures_comptable')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId);
-    const n = ((count ?? 0) + 1).toString().padStart(4, '0');
-    return `FAC-${new Date().getFullYear()}-${n}`;
+  const genNumero = async (retryCount = 0): Promise<string> => {
+    const year = new Date().getFullYear();
+    const maxRetries = 3;
+
+    try {
+      const { data: lastFacture, error } = await supabase
+        .from('factures_comptable')
+        .select('numero')
+        .eq('user_id', userId)
+        .ilike('numero', `FAC-${year}-%`)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      let nextNumber = 1;
+      if (lastFacture && lastFacture.length > 0) {
+        const match = lastFacture[0].numero.match(/FAC-\d+-(\d+)/);
+        if (match) {
+          nextNumber = parseInt(match[1], 10) + 1;
+        }
+      }
+
+      const newNumero = `FAC-${year}-${String(nextNumber).padStart(4, '0')}`;
+
+      const { data: existing } = await supabase
+        .from('factures_comptable')
+        .select('id')
+        .eq('numero', newNumero)
+        .maybeSingle();
+
+      if (existing && retryCount < maxRetries) {
+        return genNumero(retryCount + 1);
+      }
+
+      if (existing) {
+        const timestamp = Date.now();
+        return `FAC-${year}-${timestamp}`;
+      }
+
+      return newNumero;
+    } catch (err) {
+      console.error('Erreur génération numéro:', err);
+      const timestamp = Date.now();
+      const random = Math.floor(Math.random() * 10000);
+      return `FAC-${year}-${timestamp}-${random}`;
+    }
   };
 
-  /* ── Sauvegarde ───────────────────────────────────────────────── */
   const handleSave = async (statut: 'brouillon' | 'emise') => {
-    if (!clientNom.trim() || lignes.every(l => !l.designation.trim())) return;
+    if (!clientNom.trim()) {
+      setError('Veuillez saisir le nom du client.');
+      return;
+    }
+
+    if (lignes.every(l => !l.designation.trim())) {
+      setError('Veuillez ajouter au moins un produit.');
+      return;
+    }
+
+    setError(null);
     setSaving(true);
+
     try {
       const numero = await genNumero();
+
+      const factureData: any = {
+        user_id: userId,
+        numero,
+        statut,
+        client_nom: clientNom.trim(),
+        client_phone: clientPhone.trim() || null,
+        client_email: clientEmail.trim() || null,
+        client_adresse: clientAdresse.trim() || null,
+        date_facture: new Date().toISOString().slice(0, 10),
+        sous_total: sousTotal,
+        remise_montant: remiseMontant,
+        tva_pct: tvaPct,
+        tva_montant: tvaMontant,
+        total_ttc: totalTTC,
+        notes: notes.trim() || null,
+        created_at: new Date().toISOString(),
+      };
+
       const { data: facture, error } = await supabase
         .from('factures_comptable')
-        .insert({
-          user_id:         userId,
-          numero,
-          statut,
-          client_nom:      clientNom.trim(),
-          client_phone:    clientPhone.trim() || null,
-          client_email:    clientEmail.trim() || null,
-          client_adresse:  clientAdresse.trim() || null,
-          date_facture:    new Date().toISOString().slice(0, 10),
-          echeance:        null,
-          sous_total:      sousTotal,
-          remise_montant:  remiseMontant,
-          remise_pct:      0,
-          tva_pct:         tvaPct,
-          tva_montant:     tvaMontant,
-          total_ttc:       totalTTC,
-          notes:           notes.trim() || null,
-          created_at:      new Date().toISOString(),
-        })
+        .insert(factureData)
         .select()
         .single();
 
-      if (error || !facture) throw error;
+      if (error) {
+        console.error('Erreur Supabase:', error);
+        if (error.code === '23505') {
+          setError('Conflit de numéro de facture. Veuillez réessayer.');
+        } else {
+          setError(`Erreur: ${error.message}`);
+        }
+        throw error;
+      }
 
-      const lignesInsert = lignes
-        .filter(l => l.designation.trim())
-        .map((l, i) => ({
-          facture_id:    facture.id,
-          ordre:         i + 1,
-          designation:   l.designation.trim(),
-          reference:     l.reference.trim() || null,
-          couleur:       l.couleur.trim() || null,
-          format:        l.format.trim() || null,
-          quantite_m2:   l.quantite_m2,
-          prix_unitaire: l.prix_unitaire,
-          remise_pct:    l.remise_pct,
-          total_ligne:   l.total_ligne,
-        }));
+      if (!facture) throw new Error('Aucune facture créée');
 
-      await supabase.from('facture_lignes_comptable').insert(lignesInsert);
+      const lignesValides = lignes.filter(l => l.designation.trim());
+
+      const lignesInsert = lignesValides.map((l, i) => ({
+        facture_id: facture.id,
+        ordre: i + 1,
+        designation: l.designation.trim(),
+        reference: l.reference.trim() || null,
+        couleur: l.couleur.trim() || null,
+        format: l.format.trim() || null,
+        quantite_m2: l.quantite_m2,
+        prix_unitaire: l.prix_unitaire,
+        remise_pct: l.remise_pct,
+        total_ligne: l.total_ligne,
+      }));
+
+      const { error: lignesError } = await supabase
+        .from('facture_lignes_comptable')
+        .insert(lignesInsert);
+
+      if (lignesError) {
+        console.error('Erreur insertion lignes:', lignesError);
+        setError(`Erreur lors de l'ajout des produits: ${lignesError.message}`);
+        throw lignesError;
+      }
+
       onFactureCreee(facture.id);
-    } catch (e) {
-      console.error(e);
-      alert('Erreur lors de la création de la facture');
+    } catch (e: any) {
+      console.error('Exception:', e);
+      if (!error) {
+        setError('Une erreur est survenue lors de la création de la facture.');
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  /* ══════════════════════════════════════════════════════════════ */
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
-
-      {/* Header */}
       <div>
         <h2 className="text-white text-2xl font-black tracking-tight">Nouvelle facture</h2>
         <p className="text-white/40 text-sm mt-0.5">Remplissez les informations ci-dessous</p>
       </div>
 
-      {/* ── Section client ─────────────────────────────────────────── */}
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+          <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>
+        </div>
+      )}
+
+      {/* Section client */}
       <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-white font-bold text-sm uppercase tracking-wider">Client</h3>
-
-          {/* Bouton « Choisir un client existant » */}
           <div className="relative">
             <button
               onClick={() => setShowClientDrop(v => !v)}
@@ -255,7 +432,6 @@ export default function NouvelleVentePage({
               Choisir un client
               <ChevronDown className="w-3 h-3" />
             </button>
-
             {showClientDrop && (
               <div className="absolute right-0 top-9 z-40 w-72 bg-[#0a0f1e] border border-white/10 rounded-xl shadow-2xl overflow-hidden">
                 <div className="p-2 border-b border-white/5">
@@ -299,19 +475,10 @@ export default function NouvelleVentePage({
           </div>
         </div>
 
-        {/* Badge client pré-sélectionné */}
         {preselectedClient && clientNom === preselectedClient.nom && (
           <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5">
             <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-emerald-400 text-xs font-medium">Client pré-rempli depuis la liste</span>
-          </div>
-        )}
-
-        {/* Badge produit pré-sélectionné */}
-        {preselectedProduct && lignes.length > 0 && lignes[0].designation === preselectedProduct.nom && (
-          <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-1.5">
-            <Package className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-blue-400 text-xs font-medium">Produit pré-rempli depuis le catalogue</span>
           </div>
         )}
 
@@ -355,26 +522,25 @@ export default function NouvelleVentePage({
         </div>
       </div>
 
-      {/* ── Tableau des lignes ─────────────────────────────────────── */}
+      {/* Tableau des lignes */}
       <div className="bg-[#0d1627] border border-white/5 rounded-2xl overflow-hidden">
         <div className="p-5 border-b border-white/5">
           <h3 className="text-white font-bold text-sm uppercase tracking-wider">Lignes de facturation</h3>
         </div>
-
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5 bg-[#060d1a]">
-                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[160px]">Désignation</th>
-                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[100px]">Référence</th>
-                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Couleur</th>
-                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Format</th>
-                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[80px]">Qté (m²)</th>
-                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[90px]">Prix/m²</th>
-                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[80px]">Remise %</th>
-                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30 min-w-[100px]">Total</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Désignation</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Référence</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Couleur</th>
+                <th className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-white/30">Format</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30">Qté (m²)</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30">Prix/m²</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30">Remise %</th>
+                <th className="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-white/30">Total</th>
                 <th className="px-3 py-3 w-10"></th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {lignes.map((l, i) => (
@@ -387,6 +553,7 @@ export default function NouvelleVentePage({
                             const p = produits.find(x => x.id === e.target.value);
                             if (p) {
                               updateLigne(l.id, {
+                                produit_id: p.id,
                                 designation: p.nom,
                                 reference: p.reference || l.reference,
                                 couleur: p.couleur || l.couleur,
@@ -399,19 +566,19 @@ export default function NouvelleVentePage({
                         }}
                         className="flex-1 bg-[#060d1a] text-white text-xs rounded-lg px-1.5 py-1 border border-white/10 focus:outline-none focus:border-emerald-500 transition"
                       >
-                        <option value="">← Prod. existant</option>
+                        <option value="">← Sélectionner produit</option>
                         {produits.map(p => (
                           <option key={p.id} value={p.id}>{p.nom}</option>
                         ))}
                       </select>
                       <input 
                         value={l.designation} 
-                        onChange={e => updateLigne(l.id, { designation: e.target.value })}
+                        onChange={e => updateLigne(l.id, { designation: e.target.value, produit_id: undefined })}
                         placeholder="Ex: Carrelage sol"
                         className="flex-1 bg-transparent text-white placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
                       />
                     </div>
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <input 
                       value={l.reference} 
@@ -419,7 +586,7 @@ export default function NouvelleVentePage({
                       placeholder="Réf."
                       className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
                     />
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <input 
                       value={l.couleur} 
@@ -427,7 +594,7 @@ export default function NouvelleVentePage({
                       placeholder="Beige"
                       className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
                     />
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <input 
                       value={l.format} 
@@ -435,44 +602,39 @@ export default function NouvelleVentePage({
                       placeholder="60x60"
                       className="w-full bg-transparent text-white/70 placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition text-xs" 
                     />
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <input 
-                      type="number" min="0" step="0.01"
+                      type="number"
                       value={l.quantite_m2}
                       onChange={e => updateLigne(l.id, { quantite_m2: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
+                      className={`w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition ${noSpinnerClass}`}
                     />
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <input 
-                      type="number" min="0"
+                      type="number"
                       value={l.prix_unitaire}
                       onChange={e => updateLigne(l.id, { prix_unitaire: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition" 
+                      className={`w-full bg-transparent text-white text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-white/20 transition ${noSpinnerClass}`}
                     />
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     <div className="relative">
                       <input
-                        type="number" min="0" max="100" step="0.5"
+                        type="number"
                         value={l.remise_pct}
                         onChange={e => updateLigne(l.id, { remise_pct: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) })}
-                        className="w-full bg-transparent text-amber-400 text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-amber-500/30 transition pr-5"
+                        className={`w-full bg-transparent text-amber-400 text-right placeholder-white/20 focus:outline-none focus:bg-[#060d1a] rounded-lg px-2 py-1.5 border border-transparent focus:border-amber-500/30 transition pr-5 ${noSpinnerClass}`}
                       />
                       <span className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 text-xs pointer-events-none">%</span>
                     </div>
-                    {l.remise_pct > 0 && (
-                      <div className="text-xs text-amber-500/60 text-right pr-2 mt-0.5">
-                        - {fmt(l.quantite_m2 * l.prix_unitaire * l.remise_pct / 100)} F
-                      </div>
-                    )}
-                   </td>
+                  </td>
                   <td className="px-3 py-2 text-right">
                     <span className={`font-bold ${l.remise_pct > 0 ? 'text-emerald-400' : 'text-white'}`}>
                       {fmt(l.total_ligne)} F
                     </span>
-                   </td>
+                  </td>
                   <td className="px-3 py-2">
                     {lignes.length > 1 && (
                       <button onClick={() => removeLigne(l.id)}
@@ -480,14 +642,12 @@ export default function NouvelleVentePage({
                         <Trash2 className="w-4 h-4" />
                       </button>
                     )}
-                   </td>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-
-        {/* Bouton ajout ligne */}
         <div className="p-4 border-t border-white/5">
           <button onClick={addLigne}
             className="inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-300 text-sm font-medium transition">
@@ -496,10 +656,8 @@ export default function NouvelleVentePage({
         </div>
       </div>
 
-      {/* ── Totaux + options ─────────────────────────────────────── */}
+      {/* Totaux */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* Notes */}
         <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5">
           <label className="text-white/40 text-xs font-bold uppercase tracking-wider mb-2 block">Notes / Conditions</label>
           <textarea 
@@ -510,35 +668,31 @@ export default function NouvelleVentePage({
             className="w-full bg-[#060d1a] text-white rounded-xl px-4 py-3 border border-white/10 focus:outline-none focus:border-emerald-500 transition placeholder-white/20 text-sm resize-none" 
           />
         </div>
-
-        {/* Récapitulatif */}
         <div className="bg-[#0d1627] border border-white/5 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between gap-4">
             <label className="text-white/40 text-xs font-bold uppercase tracking-wider">Remise à déduire</label>
             <div className="relative w-32">
               <input 
-                type="number" min="0" step="0.01"
+                type="number"
                 value={remiseMontant}
                 onChange={e => setRemiseMontant(Math.max(0, parseFloat(e.target.value) || 0))}
-                className="w-full bg-[#060d1a] text-amber-400 text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-amber-500/40 transition pr-7 text-sm" 
+                className={`w-full bg-[#060d1a] text-amber-400 text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-amber-500/40 transition pr-7 text-sm ${noSpinnerClass}`}
               />
               <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 text-xs">F</span>
             </div>
           </div>
-
           <div className="flex items-center justify-between gap-4">
             <label className="text-white/40 text-xs font-bold uppercase tracking-wider">TVA</label>
             <div className="relative w-28">
               <input 
-                type="number" min="0" max="100" step="0.5"
+                type="number"
                 value={tvaPct}
                 onChange={e => setTvaPct(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                className="w-full bg-[#060d1a] text-white text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 transition pr-7 text-sm" 
+                className={`w-full bg-[#060d1a] text-white text-right rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-emerald-500 transition pr-7 text-sm ${noSpinnerClass}`}
               />
               <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 text-xs">%</span>
             </div>
           </div>
-
           <div className="border-t border-white/5 pt-4 space-y-2">
             <div className="flex justify-between text-sm text-white/50">
               <span>Sous-total HT</span>
@@ -564,7 +718,7 @@ export default function NouvelleVentePage({
         </div>
       </div>
 
-      {/* ── Boutons de sauvegarde ────────────────────────────────── */}
+      {/* Boutons */}
       <div className="flex flex-col sm:flex-row gap-3 justify-end pb-8">
         <button
           onClick={() => handleSave('brouillon')}
